@@ -1,0 +1,42 @@
+{
+  "tools": [
+    {
+      "tool_name": "uom_conversion",
+      "description": "Get the unit-of-measure conversion value for a product item from the UOM service.",
+      "project": "UOM-Dev",
+      "method": "GET",
+      "target_url": "https://apim-dev-intg.azure-api.net/api/dev/uom/v1/uomConversion",
+      "auth_header": "x-api-key",
+      "auth_key_env": "APIM_UOM_DEV_KEY",
+      "param_location": "query",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "itemNumber": { "type": "string", "description": "The product item number to convert" },
+          "orgCode":    { "type": "string", "description": "The organization code, e.g. MAS" }
+        },
+        "required": ["itemNumber", "orgCode"]
+      }
+    },
+    {
+      "tool_name": "update_order_request",
+      "description": "Update a sales order's reason code, requested date and appointment type via the Dimitri order service.",
+      "project": "Dimitri-UAT",
+      "method": "POST",
+      "target_url": "https://apim-uat-intg.azure-api.net/uat/api/dimitri/v1/updateOrderRequest",
+      "auth_header": "x-api-key",
+      "auth_key_env": "APIM_DIMITRI_UAT_KEY",
+      "param_location": "body",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "SO_NUMBER":        { "type": "string", "description": "Sales order number" },
+          "REASON_CODE":      { "type": "string", "description": "Reason code for the update, e.g. 02-Customer-CPU Carrier" },
+          "REQUEST_DATE":     { "type": "string", "description": "New requested date-time in ISO 8601 format" },
+          "APPOINTMENT_TYPE": { "type": "string", "description": "Appointment type code, e.g. NP" }
+        },
+        "required": ["SO_NUMBER", "REASON_CODE", "REQUEST_DATE", "APPOINTMENT_TYPE"]
+      }
+    }
+  ]
+}
