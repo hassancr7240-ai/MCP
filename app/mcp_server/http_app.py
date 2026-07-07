@@ -1,20 +1,12 @@
 """
-HTTP/SSE transport for the registry-driven MCP server.
+HTTP transport for the registry-driven MCP server.
 
-stdio transport (server.py) is for local Claude Desktop config.
-This module exposes the exact same `server` over HTTP+SSE so it can be
-deployed to Azure (Container App / App Service / Function App with a
-custom handler) and reached remotely by any MCP-aware client — this is
-what "publish via MCP" means in production: one HTTP endpoint that an
-AI client connects to, discovers every registered tool, and calls
-whichever one it needs, regardless of which project that tool's API
-actually lives in.
+Exposes two transports:
+  /sse + /messages/  — Legacy SSE transport (Claude Desktop, dashboard client)
+  /mcp               — Streamable HTTP transport (Copilot Studio, modern clients)
 
 Run directly:
     uvicorn app.mcp_server.http_app:app --host 0.0.0.0 --port 8080
-
-Then point an MCP client at:
-    http://<host>:8080/sse
 """
 from __future__ import annotations
 
@@ -30,6 +22,7 @@ from app.mcp_server.server import server
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
+# Legacy SSE transport — backward compat for Claude Desktop and dashboard
 _sse = SseServerTransport("/messages/")
 
 
@@ -45,9 +38,25 @@ async def _handle_sse(request: Request) -> None:
         )
 
 
-app = Starlette(
-    routes=[
-        Route("/sse", endpoint=_handle_sse),
-        Mount("/messages/", app=_sse.handle_post_message),
-    ],
-)
+routes = [
+    Route("/sse", endpoint=_handle_sse),
+    Mount("/messages/", app=_sse.handle_post_message),
+]
+
+# Streamable HTTP transport — for Copilot Studio and modern MCP clients
+try:
+    from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
+
+    _session_manager = StreamableHTTPSessionManager(
+        app=server,
+        event_store=None,
+        json_response=False,
+        stateless=True,
+    )
+    routes.append(Mount("/mcp", app=_session_manager.handle_request))
+    logger.info("Streamable HTTP transport enabled at /mcp")
+except (ImportError, AttributeError) as exc:
+    logger.warning("Streamable HTTP transport not available: %s", exc)
+
+
+app = Starlette(routes=routes)
