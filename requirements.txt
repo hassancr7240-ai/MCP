@@ -10,3 +10,7 @@ python-dotenv==1.0.1
 # HTTP/SSE transport for production deployment
 starlette==0.41.3
 uvicorn[standard]==0.32.1
+
+# Azure identity — used by APIM-dynamic server (server_apim.py)
+# DefaultAzureCredential picks up Managed Identity on Azure, az login locally
+azure-identity>=1.15.0

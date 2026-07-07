@@ -1,0 +1,254 @@
+<!--
+  APIM Native MCP Gateway Policy
+  ================================
+  Deploy this policy on an APIM API to make APIM itself act as an MCP server.
+  No Python server, no App Service — APIM handles the MCP protocol directly.
+
+  HOW TO DEPLOY:
+  1. In Azure Portal → APIM (apim-dev-intg) → APIs → + Add API → HTTP
+     Display name : Niagara MCP Gateway
+     Web service URL: https://apim-dev-intg.azure-api.net   (self, unused)
+     API URL suffix: mcp-gateway
+  2. Add operation: POST /mcp
+  3. Open "Policies" for that operation and paste this XML.
+  4. In APIM → Named Values, add secrets:
+       apim-uom-dev-key      = 28f1c7898b6448deac73ab1b08ffd18e
+       apim-dimitri-uat-key  = a175849a08ab494496a3a50b8b1f15bd
+  5. Save. The MCP endpoint is live at:
+       https://apim-dev-intg.azure-api.net/mcp-gateway/mcp
+
+  MCP PROTOCOL HANDLED:
+    initialize   → returns server info (no backend call)
+    tools/list   → returns hardcoded tool list (update here when APIs are added)
+    tools/call   → routes to the correct APIM-managed backend
+
+  GOVERNANCE (built into APIM, no extra code):
+    - Rate limiting  : add rate-limit-by-key policy below
+    - Auth           : add validate-jwt policy for Azure AD
+    - Monitoring     : all calls logged to Application Insights automatically
+    - API key        : require Ocp-Apim-Subscription-Key header on /mcp-gateway
+-->
+<policies>
+  <inbound>
+    <base />
+    <cors>
+      <allowed-origins><origin>*</origin></allowed-origins>
+      <allowed-methods><method>POST</method><method>OPTIONS</method></allowed-methods>
+      <allowed-headers><header>*</header></allowed-headers>
+    </cors>
+
+    <!-- Optional: Uncomment to enforce Azure AD authentication
+    <validate-jwt header-name="Authorization" failed-validation-httpcode="401">
+      <openid-config url="https://login.microsoftonline.com/ffa87d4a-d2e1-4e65-8245-74af6dacea09/.well-known/openid-configuration" />
+      <required-claims>
+        <claim name="aud"><value>api://721cfe9f-eb17-4392-8f38-cf2d9ad63af9</value></claim>
+      </required-claims>
+    </validate-jwt>
+    -->
+
+    <!-- Optional: Rate limit to 100 calls/minute per subscription key
+    <rate-limit-by-key calls="100" renewal-period="60" counter-key="@(context.Subscription.Id)" />
+    -->
+
+    <!-- Parse the incoming MCP JSON request -->
+    <set-variable name="mcpBody"
+      value="@(context.Request.Body.As<JObject>(preserveContent: true))" />
+    <set-variable name="mcpMethod"
+      value="@(context.Variables.GetValueOrDefault<JObject>("mcpBody")?["method"]?.ToString() ?? string.Empty)" />
+    <set-variable name="mcpId"
+      value="@(context.Variables.GetValueOrDefault<JObject>("mcpBody")?["id"]?.ToString() ?? "1")" />
+  </inbound>
+
+  <backend>
+    <choose>
+
+      <!-- ── initialize ───────────────────────────────────────────────── -->
+      <when condition="@(context.Variables.GetValueOrDefault<string>("mcpMethod") == "initialize")">
+        <return-response>
+          <set-status code="200" reason="OK" />
+          <set-header name="Content-Type" exists-action="override">
+            <value>application/json</value>
+          </set-header>
+          <set-body>@{
+            var id = context.Variables.GetValueOrDefault<string>("mcpId");
+            return
+              "{\"jsonrpc\":\"2.0\",\"id\":" + id + "," +
+              "\"result\":{" +
+                "\"protocolVersion\":\"2024-11-05\"," +
+                "\"capabilities\":{\"tools\":{}}," +
+                "\"serverInfo\":{\"name\":\"apim-mcp-gateway\",\"version\":\"1.0.0\"}" +
+              "}}";
+          }</set-body>
+        </return-response>
+      </when>
+
+      <!-- ── tools/list ────────────────────────────────────────────────── -->
+      <when condition="@(context.Variables.GetValueOrDefault<string>("mcpMethod") == "tools/list")">
+        <return-response>
+          <set-status code="200" reason="OK" />
+          <set-header name="Content-Type" exists-action="override">
+            <value>application/json</value>
+          </set-header>
+          <!--
+            ADD NEW TOOLS HERE when a new API is published to APIM.
+            In the dynamic Python server (server_apim.py) this list is built
+            automatically from APIM — no edit needed there.
+            In this native APIM policy, you update the JSON below.
+          -->
+          <set-body>@{
+            var id = context.Variables.GetValueOrDefault<string>("mcpId");
+            var tools =
+              "[" +
+                "{" +
+                  "\"name\":\"uom_conversion\"," +
+                  "\"description\":\"Convert a unit of measure for a product item in the ERP system. Returns the base UOM and conversion factor.\"," +
+                  "\"inputSchema\":{" +
+                    "\"type\":\"object\"," +
+                    "\"properties\":{" +
+                      "\"itemNumber\":{\"type\":\"string\",\"description\":\"Product item number\"}," +
+                      "\"orgCode\":{\"type\":\"string\",\"description\":\"Organization code e.g. MAS\"}" +
+                    "}," +
+                    "\"required\":[\"itemNumber\",\"orgCode\"]" +
+                  "}" +
+                "}," +
+                "{" +
+                  "\"name\":\"update_order_request\"," +
+                  "\"description\":\"Update a Dimitri AOP rework order with new reason code, date, and appointment type.\"," +
+                  "\"inputSchema\":{" +
+                    "\"type\":\"object\"," +
+                    "\"properties\":{" +
+                      "\"SO_NUMBER\":{\"type\":\"string\",\"description\":\"Sales order number\"}," +
+                      "\"REASON_CODE\":{\"type\":\"string\",\"description\":\"Reason code e.g. 02-Customer-CPU Carrier\"}," +
+                      "\"REQUEST_DATE\":{\"type\":\"string\",\"description\":\"New date in ISO 8601 format\"}," +
+                      "\"APPOINTMENT_TYPE\":{\"type\":\"string\",\"description\":\"Appointment type code e.g. NP\"}" +
+                    "}," +
+                    "\"required\":[\"SO_NUMBER\",\"REASON_CODE\",\"REQUEST_DATE\",\"APPOINTMENT_TYPE\"]" +
+                  "}" +
+                "}" +
+              "]";
+            return
+              "{\"jsonrpc\":\"2.0\",\"id\":" + id + "," +
+              "\"result\":{\"tools\":" + tools + "}}";
+          }</set-body>
+        </return-response>
+      </when>
+
+      <!-- ── tools/call ─────────────────────────────────────────────────── -->
+      <when condition="@(context.Variables.GetValueOrDefault<string>("mcpMethod") == "tools/call")">
+        <set-variable name="toolName"
+          value="@(context.Variables.GetValueOrDefault<JObject>("mcpBody")?["params"]?["name"]?.ToString() ?? string.Empty)" />
+        <set-variable name="toolArgs"
+          value="@(context.Variables.GetValueOrDefault<JObject>("mcpBody")?["params"]?["arguments"])" />
+
+        <choose>
+
+          <!-- ── uom_conversion ─────────────────────────────────────── -->
+          <when condition="@(context.Variables.GetValueOrDefault<string>("toolName") == "uom_conversion")">
+            <set-variable name="itemNumber"
+              value="@(context.Variables.GetValueOrDefault<JObject>("toolArgs")?["itemNumber"]?.ToString() ?? string.Empty)" />
+            <set-variable name="orgCode"
+              value="@(context.Variables.GetValueOrDefault<JObject>("toolArgs")?["orgCode"]?.ToString() ?? string.Empty)" />
+            <send-request mode="new" response-variable-name="backendResp" timeout="30" ignore-error="false">
+              <set-url>@($"https://apim-dev-intg.azure-api.net/api/dev/uom/v1/uomConversion?itemNumber={Uri.EscapeDataString(context.Variables.GetValueOrDefault<string>("itemNumber"))}&orgCode={Uri.EscapeDataString(context.Variables.GetValueOrDefault<string>("orgCode"))}")</set-url>
+              <set-method>GET</set-method>
+              <set-header name="x-api-key" exists-action="override">
+                <value>{{apim-uom-dev-key}}</value>
+              </set-header>
+            </send-request>
+            <return-response>
+              <set-status code="200" reason="OK" />
+              <set-header name="Content-Type" exists-action="override">
+                <value>application/json</value>
+              </set-header>
+              <set-body>@{
+                var id = context.Variables.GetValueOrDefault<string>("mcpId");
+                var body = ((IResponse)context.Variables["backendResp"]).Body.As<string>();
+                var escaped = body.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\n", "\\n").Replace("\r", "");
+                return
+                  "{\"jsonrpc\":\"2.0\",\"id\":" + id + "," +
+                  "\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"" + escaped + "\"}],\"isError\":false}}";
+              }</set-body>
+            </return-response>
+          </when>
+
+          <!-- ── update_order_request ───────────────────────────────── -->
+          <when condition="@(context.Variables.GetValueOrDefault<string>("toolName") == "update_order_request")">
+            <send-request mode="new" response-variable-name="backendResp" timeout="30" ignore-error="false">
+              <set-url>https://apim-uat-intg.azure-api.net/uat/api/dimitri/v1/updateOrderRequest</set-url>
+              <set-method>POST</set-method>
+              <set-header name="Content-Type" exists-action="override">
+                <value>application/json</value>
+              </set-header>
+              <set-header name="x-api-key" exists-action="override">
+                <value>{{apim-dimitri-uat-key}}</value>
+              </set-header>
+              <set-body>@(context.Variables.GetValueOrDefault<JObject>("toolArgs")?.ToString() ?? "{}")</set-body>
+            </send-request>
+            <return-response>
+              <set-status code="200" reason="OK" />
+              <set-header name="Content-Type" exists-action="override">
+                <value>application/json</value>
+              </set-header>
+              <set-body>@{
+                var id = context.Variables.GetValueOrDefault<string>("mcpId");
+                var body = ((IResponse)context.Variables["backendResp"]).Body.As<string>();
+                var escaped = body.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\n", "\\n").Replace("\r", "");
+                return
+                  "{\"jsonrpc\":\"2.0\",\"id\":" + id + "," +
+                  "\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"" + escaped + "\"}],\"isError\":false}}";
+              }</set-body>
+            </return-response>
+          </when>
+
+          <!-- ── unknown tool ───────────────────────────────────────── -->
+          <otherwise>
+            <return-response>
+              <set-status code="200" reason="OK" />
+              <set-header name="Content-Type" exists-action="override">
+                <value>application/json</value>
+              </set-header>
+              <set-body>@{
+                var id = context.Variables.GetValueOrDefault<string>("mcpId");
+                var tool = context.Variables.GetValueOrDefault<string>("toolName");
+                return
+                  "{\"jsonrpc\":\"2.0\",\"id\":" + id + "," +
+                  "\"error\":{\"code\":-32602,\"message\":\"Unknown tool: " + tool + "\"}}";
+              }</set-body>
+            </return-response>
+          </otherwise>
+        </choose>
+      </when>
+
+      <!-- ── unsupported MCP method ────────────────────────────────────── -->
+      <otherwise>
+        <return-response>
+          <set-status code="200" reason="OK" />
+          <set-header name="Content-Type" exists-action="override">
+            <value>application/json</value>
+          </set-header>
+          <set-body>@{
+            var id = context.Variables.GetValueOrDefault<string>("mcpId");
+            return
+              "{\"jsonrpc\":\"2.0\",\"id\":" + id + "," +
+              "\"error\":{\"code\":-32601,\"message\":\"Method not found\"}}";
+          }</set-body>
+        </return-response>
+      </otherwise>
+    </choose>
+  </backend>
+
+  <outbound>
+    <base />
+  </outbound>
+
+  <on-error>
+    <base />
+    <return-response>
+      <set-status code="500" reason="Internal Error" />
+      <set-header name="Content-Type" exists-action="override">
+        <value>application/json</value>
+      </set-header>
+      <set-body>{"jsonrpc":"2.0","id":null,"error":{"code":-32603,"message":"Internal server error"}}</set-body>
+    </return-response>
+  </on-error>
+</policies>
