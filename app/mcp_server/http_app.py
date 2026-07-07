@@ -11,6 +11,7 @@ Run directly:
 from __future__ import annotations
 
 import logging
+from contextlib import asynccontextmanager
 
 from mcp.server.sse import SseServerTransport
 from starlette.applications import Starlette
@@ -44,6 +45,7 @@ routes = [
 ]
 
 # Streamable HTTP transport — for Copilot Studio and modern MCP clients
+_session_manager = None
 try:
     from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 
@@ -59,4 +61,14 @@ except (ImportError, AttributeError) as exc:
     logger.warning("Streamable HTTP transport not available: %s", exc)
 
 
-app = Starlette(routes=routes)
+@asynccontextmanager
+async def lifespan(app):
+    if _session_manager is not None:
+        async with _session_manager.run():
+            logger.info("StreamableHTTPSessionManager running")
+            yield
+    else:
+        yield
+
+
+app = Starlette(routes=routes, lifespan=lifespan)
