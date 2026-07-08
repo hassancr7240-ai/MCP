@@ -11,4 +11,4 @@ ENV PYTHONPATH=/app
 
 EXPOSE 8080
 
-CMD ["uvicorn", "app.mcp_server.http_app:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["uvicorn", "app.mcp_server.http_app_apim:app", "--host", "0.0.0.0", "--port", "8080"]

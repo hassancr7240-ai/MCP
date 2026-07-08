@@ -1,67 +1,111 @@
 """
-APIM-backed MCP server.
+APIM-backed MCP server with JSON fallback.
 
-Uses apim_dynamic.py to discover tools live from Azure API Management instead
-of reading a static tools_registry.json file.
+Priority:
+  1. APIM dynamic discovery (reads live from Azure APIM Management API)
+  2. JSON fallback (tools_registry.json) — used when APIM auth is unavailable
 
-Key difference vs server.py:
-  server.py    → reads tools_registry.json on startup (static, redeploy to update)
-  server_apim.py → reads APIM Management API on each tools/list call (dynamic)
-
-Adding a new API to APIM and tagging it "mcp-enabled" makes it appear here
-within seconds — no code change, no redeploy needed.
+This means the server is always functional:
+  - With APIM credentials  → tools list updates automatically when APIs are added to APIM
+  - Without APIM credentials → falls back to tools_registry.json exactly like the original server
 """
 from __future__ import annotations
 
+import json
 import logging
 
+import mcp.types as types
 from mcp.server import Server
-from mcp.types import Tool, TextContent
 
 from app.mcp_server import apim_dynamic
+from app.mcp_server.dispatcher import ToolExecutionError, execute_tool
+from app.mcp_server.registry import ToolDefinition, get_tool, load_tools
 
 logger = logging.getLogger(__name__)
 
-server = Server("apim-mcp-gateway")
+server = Server("registry-mcp-server")
 
-# Cache of tools fetched from APIM — refreshed on every tools/list call.
-# In production, add a TTL cache (e.g. 60 seconds) to avoid hammering the
-# Azure Management API on every agent request.
-_tools_cache: list[dict] = []
+# APIM-discovered tools cache — refreshed on every tools/list call
+_apim_tools: list[dict] = []
+
+# JSON fallback registry — loaded once at startup
+_json_registry: dict[str, ToolDefinition] = load_tools()
 
 
 @server.list_tools()
-async def handle_list_tools() -> list[Tool]:
-    global _tools_cache
+async def list_tools() -> list[types.Tool]:
+    global _apim_tools
 
-    logger.info("Fetching tool list from APIM...")
-    _tools_cache = await apim_dynamic.fetch_tools()
-    logger.info("APIM returned %d tools", len(_tools_cache))
+    # Try APIM dynamic discovery first
+    try:
+        _apim_tools = await apim_dynamic.fetch_tools()
+        if _apim_tools:
+            logger.info("APIM dynamic: returning %d tools", len(_apim_tools))
+            return [
+                types.Tool(
+                    name=t["name"],
+                    description=t["description"],
+                    inputSchema=t["inputSchema"],
+                )
+                for t in _apim_tools
+            ]
+    except Exception as exc:
+        logger.warning("APIM discovery failed, falling back to JSON registry: %s", exc)
 
+    # Fallback to tools_registry.json
+    logger.info("JSON fallback: returning %d tools from registry", len(_json_registry))
     return [
-        Tool(
-            name=t["name"],
-            description=t["description"],
-            inputSchema=t["inputSchema"],
+        types.Tool(
+            name=tool.tool_name,
+            description=f"[{tool.project}] {tool.description}",
+            inputSchema=tool.parameters,
         )
-        for t in _tools_cache
-        # Strip _meta — not part of the MCP spec
+        for tool in _json_registry.values()
     ]
 
 
 @server.call_tool()
-async def handle_call_tool(name: str, arguments: dict) -> list[TextContent]:
-    logger.info("Tool call: %s  args=%s", name, arguments)
+async def call_tool(name: str, arguments: dict | None) -> list[types.TextContent]:
+    arguments = arguments or {}
 
-    if not _tools_cache:
-        # tools/list was not called first — fetch on demand
-        await handle_list_tools()
+    # If we have APIM tools cached, try APIM routing first
+    if _apim_tools:
+        apim_tool = next((t for t in _apim_tools if t["name"] == name), None)
+        if apim_tool:
+            try:
+                result = await apim_dynamic.call_tool(name, arguments, _apim_tools)
+                return [types.TextContent(type="text", text=result)]
+            except Exception as exc:
+                logger.warning("APIM tool call failed for %s: %s", name, exc)
+
+    # Fallback to JSON registry dispatcher
+    tool = get_tool(name, _json_registry)
+    if tool is None:
+        return [types.TextContent(
+            type="text",
+            text=json.dumps({
+                "mcp_status": "error",
+                "error_type": "unknown_tool",
+                "tool_name": name,
+                "available_tools": list(_json_registry.keys()),
+            }),
+        )]
 
     try:
-        result = await apim_dynamic.call_tool(name, arguments, _tools_cache)
-        return [TextContent(type="text", text=result)]
-    except ValueError as exc:
-        return [TextContent(type="text", text=f"Error: {exc}")]
-    except Exception as exc:
-        logger.exception("Tool call failed: %s", exc)
-        return [TextContent(type="text", text=f"Error calling {name}: {exc}")]
+        result = await execute_tool(tool, arguments)
+        payload = {
+            "mcp_status": "success",
+            "tool_name": tool.tool_name,
+            "project": tool.project,
+            "result": result,
+        }
+    except ToolExecutionError as exc:
+        logger.error("Tool failed | tool=%s detail=%s", exc.tool_name, exc.detail)
+        payload = {
+            "mcp_status": "error",
+            "tool_name": exc.tool_name,
+            "backend_status_code": exc.status_code,
+            "message": exc.detail,
+        }
+
+    return [types.TextContent(type="text", text=json.dumps(payload))]
