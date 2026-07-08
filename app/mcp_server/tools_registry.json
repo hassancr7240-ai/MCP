@@ -2,7 +2,7 @@
   "tools": [
     {
       "tool_name": "uom_conversion",
-      "description": "Get the unit-of-measure conversion value for a product item from the UOM service.",
+      "description": "Get the unit-of-measure conversion value for a product item. Use when user asks about item weight, volume, or UOM conversion for a specific item and org.",
       "project": "UOM-Dev",
       "method": "GET",
       "target_url": "https://apim-dev-intg.azure-api.net/api/dev/uom/v1/uomConversion",
@@ -12,15 +12,15 @@
       "parameters": {
         "type": "object",
         "properties": {
-          "itemNumber": { "type": "string", "description": "The product item number to convert" },
-          "orgCode":    { "type": "string", "description": "The organization code, e.g. MAS" }
+          "itemNumber": { "type": "string", "description": "The product item number to look up" },
+          "orgCode":    { "type": "string", "description": "Organization code, e.g. MAS, TRN" }
         },
         "required": ["itemNumber", "orgCode"]
       }
     },
     {
       "tool_name": "update_order_request",
-      "description": "Update a sales order's reason code, requested date and appointment type via the Dimitri order service.",
+      "description": "Update a sales order reason code, requested delivery date, and appointment type. Use when user wants to change delivery date or update order details.",
       "project": "Dimitri-UAT",
       "method": "POST",
       "target_url": "https://apim-uat-intg.azure-api.net/uat/api/dimitri/v1/updateOrderRequest",
@@ -33,9 +33,331 @@
           "SO_NUMBER":        { "type": "string", "description": "Sales order number" },
           "REASON_CODE":      { "type": "string", "description": "Reason code for the update, e.g. 02-Customer-CPU Carrier" },
           "REQUEST_DATE":     { "type": "string", "description": "New requested date-time in ISO 8601 format" },
-          "APPOINTMENT_TYPE": { "type": "string", "description": "Appointment type code, e.g. NP" }
+          "APPOINTMENT_TYPE": { "type": "string", "description": "Appointment type code, e.g. NP, AP" }
         },
         "required": ["SO_NUMBER", "REASON_CODE", "REQUEST_DATE", "APPOINTMENT_TYPE"]
+      }
+    },
+    {
+      "tool_name": "update_aop_rework_status",
+      "description": "Update the AOP (Annual Operating Plan) rework status for a sales order. Use when user wants to flag or update an order's AOP rework status.",
+      "project": "fn-dev-dimitri-order-updates",
+      "method": "POST",
+      "target_url": "https://apim-dev-intg.azure-api.net/dev/api/dimitri/v1/aop/update-aop-rework-status",
+      "auth_header": "Ocp-Apim-Subscription-Key",
+      "auth_key_env": "APIM_SUBSCRIPTION_KEY",
+      "param_location": "body",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "SO_NUMBER": { "type": "string", "description": "Sales order number" },
+          "STATUS":    { "type": "string", "description": "New rework status value" },
+          "COMMENTS":  { "type": "string", "description": "Optional comments about the status change" }
+        },
+        "required": ["SO_NUMBER", "STATUS"]
+      }
+    },
+    {
+      "tool_name": "update_demand_class",
+      "description": "Update the demand class for a sales order in the Dimitri system. Use when user wants to change or set the demand class on an order.",
+      "project": "fn-dev-dimitri-order-updates",
+      "method": "POST",
+      "target_url": "https://apim-dev-intg.azure-api.net/dev/api/dimitri/v1/aop/update-demand-class",
+      "auth_header": "Ocp-Apim-Subscription-Key",
+      "auth_key_env": "APIM_SUBSCRIPTION_KEY",
+      "param_location": "body",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "SO_NUMBER":    { "type": "string", "description": "Sales order number" },
+          "DEMAND_CLASS": { "type": "string", "description": "New demand class value to set" }
+        },
+        "required": ["SO_NUMBER", "DEMAND_CLASS"]
+      }
+    },
+    {
+      "tool_name": "get_shipment_tracking",
+      "description": "Get live tracking and shipment data for one or more orders or shipments. Use when user asks where is my shipment, tracking status, or shipment location.",
+      "project": "livetracking-getshipments",
+      "method": "POST",
+      "target_url": "https://apim-dev-intg.azure-api.net/dev/api/livetracking/v1/shipmentdata",
+      "auth_header": "Ocp-Apim-Subscription-Key",
+      "auth_key_env": "APIM_SUBSCRIPTION_KEY",
+      "param_location": "body",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "shipmentId": { "type": "string", "description": "Shipment ID to track" },
+          "orderId":    { "type": "string", "description": "Order ID to look up shipment for" }
+        },
+        "required": []
+      }
+    },
+    {
+      "tool_name": "get_purchase_order_invoice_details",
+      "description": "Retrieve purchase order invoice details including line items, amounts, and status. Use when user asks about PO invoices or purchase order details.",
+      "project": "fn-dev-purchase-orders",
+      "method": "POST",
+      "target_url": "https://apim-dev-intg.azure-api.net/api/dev/dimitri/po/v1/purchase-order-invoice-details",
+      "auth_header": "Ocp-Apim-Subscription-Key",
+      "auth_key_env": "APIM_SUBSCRIPTION_KEY",
+      "param_location": "body",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "PO_NUMBER": { "type": "string", "description": "Purchase order number" }
+        },
+        "required": ["PO_NUMBER"]
+      }
+    },
+    {
+      "tool_name": "check_transmission_status",
+      "description": "Check the EDI/transmission status for a shipment or order. Use when user asks if an order was transmitted or wants to check transmission state.",
+      "project": "dimitri-shipment-remarks",
+      "method": "GET",
+      "target_url": "https://apim-dev-intg.azure-api.net/api/dev/dimitri/orderstatus/v1/checkTransmissionStatus",
+      "auth_header": "Ocp-Apim-Subscription-Key",
+      "auth_key_env": "APIM_SUBSCRIPTION_KEY",
+      "param_location": "query",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "SO_NUMBER":  { "type": "string", "description": "Sales order number" },
+          "SHIPMENT_ID": { "type": "string", "description": "Shipment ID" }
+        },
+        "required": []
+      }
+    },
+    {
+      "tool_name": "get_pending_reason",
+      "description": "Get the pending reason for a sales order that is on hold or delayed. Use when user asks why an order is pending or what is blocking it.",
+      "project": "dimitri-shipment-remarks",
+      "method": "GET",
+      "target_url": "https://apim-dev-intg.azure-api.net/api/dev/dimitri/orderstatus/v1/getPendingReason",
+      "auth_header": "Ocp-Apim-Subscription-Key",
+      "auth_key_env": "APIM_SUBSCRIPTION_KEY",
+      "param_location": "query",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "SO_NUMBER": { "type": "string", "description": "Sales order number to check pending reason for" }
+        },
+        "required": ["SO_NUMBER"]
+      }
+    },
+    {
+      "tool_name": "get_shipment_remarks_from_otm",
+      "description": "Retrieve shipment status remarks from Oracle Transportation Management (OTM). Use when user asks for OTM status, 214 status, or shipment remarks.",
+      "project": "dimitri-shipment-remarks",
+      "method": "POST",
+      "target_url": "https://apim-dev-intg.azure-api.net/api/dev/dimitri/orderstatus/v1/get214statusfromOTM",
+      "auth_header": "Ocp-Apim-Subscription-Key",
+      "auth_key_env": "APIM_SUBSCRIPTION_KEY",
+      "param_location": "body",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "SHIPMENT_ID": { "type": "string", "description": "OTM shipment ID to retrieve remarks for" }
+        },
+        "required": ["SHIPMENT_ID"]
+      }
+    },
+    {
+      "tool_name": "update_org_change",
+      "description": "Update the organization change for an order in Dimitri. Use when user wants to change the org assignment on a sales order.",
+      "project": "dimitri-shipment-remarks",
+      "method": "POST",
+      "target_url": "https://apim-dev-intg.azure-api.net/api/dev/dimitri/orderstatus/v1/updateOrgChange",
+      "auth_header": "Ocp-Apim-Subscription-Key",
+      "auth_key_env": "APIM_SUBSCRIPTION_KEY",
+      "param_location": "body",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "SO_NUMBER": { "type": "string", "description": "Sales order number" },
+          "NEW_ORG":   { "type": "string", "description": "New organization code to assign" }
+        },
+        "required": ["SO_NUMBER", "NEW_ORG"]
+      }
+    },
+    {
+      "tool_name": "update_pending_reason",
+      "description": "Update or clear the pending reason on a sales order. Use when user wants to resolve a hold or change why an order is pending.",
+      "project": "dimitri-shipment-remarks",
+      "method": "POST",
+      "target_url": "https://apim-dev-intg.azure-api.net/api/dev/dimitri/orderstatus/v1/updatePendingReason",
+      "auth_header": "Ocp-Apim-Subscription-Key",
+      "auth_key_env": "APIM_SUBSCRIPTION_KEY",
+      "param_location": "body",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "SO_NUMBER": { "type": "string", "description": "Sales order number" },
+          "REASON":    { "type": "string", "description": "New pending reason text or code" }
+        },
+        "required": ["SO_NUMBER", "REASON"]
+      }
+    },
+    {
+      "tool_name": "ship_with_group_in_otm",
+      "description": "Ship an order release with a group assignment in Oracle Transportation Management (OTM). Use when user wants to ship an order with a specific group or batch.",
+      "project": "dimitri-shipwithgroup",
+      "method": "POST",
+      "target_url": "https://apim-dev-intg.azure-api.net/api/dev/dimitri/orderrelease/v1/shipWithGroupInOTM",
+      "auth_header": "Ocp-Apim-Subscription-Key",
+      "auth_key_env": "APIM_SUBSCRIPTION_KEY",
+      "param_location": "body",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "SHIPMENT_ID": { "type": "string", "description": "OTM shipment ID" },
+          "GROUP_ID":    { "type": "string", "description": "Group ID to assign the shipment to" }
+        },
+        "required": ["SHIPMENT_ID", "GROUP_ID"]
+      }
+    },
+    {
+      "tool_name": "get_ebs_order_details",
+      "description": "Get order details from Oracle EBS (E-Business Suite) including order lines, status, and dates. Use when user asks about EBS order details or order line information.",
+      "project": "getsetebsorders-new",
+      "method": "POST",
+      "target_url": "https://apim-dev-intg.azure-api.net/api/dev/dimitri/v2/getOrderDetails",
+      "auth_header": "Ocp-Apim-Subscription-Key",
+      "auth_key_env": "APIM_SUBSCRIPTION_KEY",
+      "param_location": "body",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "SO_NUMBER": { "type": "string", "description": "Sales order number in EBS" }
+        },
+        "required": ["SO_NUMBER"]
+      }
+    },
+    {
+      "tool_name": "send_order_request_date",
+      "description": "Send or update an order request date back to Oracle EBS. Use when user wants to push a requested date update into EBS.",
+      "project": "getsetebsorders-new",
+      "method": "POST",
+      "target_url": "https://apim-dev-intg.azure-api.net/api/dev/dimitri/v2/updateOrderRequest",
+      "auth_header": "Ocp-Apim-Subscription-Key",
+      "auth_key_env": "APIM_SUBSCRIPTION_KEY",
+      "param_location": "body",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "SO_NUMBER":        { "type": "string", "description": "Sales order number" },
+          "REASON_CODE":      { "type": "string", "description": "Reason code for the update" },
+          "REQUEST_DATE":     { "type": "string", "description": "New requested date in ISO 8601 format" },
+          "APPOINTMENT_TYPE": { "type": "string", "description": "Appointment type code" }
+        },
+        "required": ["SO_NUMBER", "REASON_CODE", "REQUEST_DATE"]
+      }
+    },
+    {
+      "tool_name": "get_service_cloud_order_details",
+      "description": "Get order details from Salesforce Service Cloud integration. Use when user asks about Service Cloud case, order details, or customer service order status.",
+      "project": "service-cloud-integration",
+      "method": "POST",
+      "target_url": "https://apim-dev-intg.azure-api.net/dev/api/service-cloud/get-order-details",
+      "auth_header": "Ocp-Apim-Subscription-Key",
+      "auth_key_env": "APIM_SUBSCRIPTION_KEY",
+      "param_location": "body",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "order_number": { "type": "string", "description": "Order number to look up in Service Cloud" },
+          "case_number":  { "type": "string", "description": "Service Cloud case number" }
+        },
+        "required": []
+      }
+    },
+    {
+      "tool_name": "get_shipments_report_from_otm",
+      "description": "Get a proactive shipments report from OTM for a date range. Use when user asks for a list of shipments, shipment summary, or proactive report.",
+      "project": "proactive-module",
+      "method": "POST",
+      "target_url": "https://apim-dev-intg.azure-api.net/dev/otm/dimitri/shipmentsreportfromotm",
+      "auth_header": "Ocp-Apim-Subscription-Key",
+      "auth_key_env": "APIM_SUBSCRIPTION_KEY",
+      "param_location": "body",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "start_date": { "type": "string", "description": "Start date for the report in YYYY-MM-DD format" },
+          "end_date":   { "type": "string", "description": "End date for the report in YYYY-MM-DD format" }
+        },
+        "required": ["start_date", "end_date"]
+      }
+    },
+    {
+      "tool_name": "get_optimal_org",
+      "description": "Get the optimal fulfillment organization (warehouse/plant) for an order based on weight, volume, and demand. Use when user asks which org should fulfill an order or for planning optimization.",
+      "project": "dimitri-planning",
+      "method": "GET",
+      "target_url": "https://apim-dev-intg.azure-api.net/api/dev/dimitri/planning/v1/getOptimalOrg",
+      "auth_header": "Ocp-Apim-Subscription-Key",
+      "auth_key_env": "APIM_SUBSCRIPTION_KEY",
+      "param_location": "query",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "weight":      { "type": "number", "description": "Total order weight" },
+          "volume":      { "type": "number", "description": "Total order volume" },
+          "demand_class": { "type": "string", "description": "Demand class for the order" }
+        },
+        "required": []
+      }
+    },
+    {
+      "tool_name": "get_pallet_scale_factors",
+      "description": "Get pallet scale factors for a specific organization used in planning. Use when user needs pallet size, scale, or weight factors for a warehouse or org.",
+      "project": "dimitri-planning",
+      "method": "GET",
+      "target_url": "https://apim-dev-intg.azure-api.net/api/dev/dimitri/planning/v1/getPalletScaleFactors",
+      "auth_header": "Ocp-Apim-Subscription-Key",
+      "auth_key_env": "APIM_SUBSCRIPTION_KEY",
+      "param_location": "query",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "org_code": { "type": "string", "description": "Organization code to get pallet scale factors for" }
+        },
+        "required": ["org_code"]
+      }
+    },
+    {
+      "tool_name": "get_shipment_details_from_logility",
+      "description": "Get shipment details from Logility (supply chain planning system). Use when user asks for Logility shipment data or planning system shipment information.",
+      "project": "dimitri-planning",
+      "method": "POST",
+      "target_url": "https://apim-dev-intg.azure-api.net/api/dev/dimitri/planning/v1/getShipmentDetailsFromLogility",
+      "auth_header": "Ocp-Apim-Subscription-Key",
+      "auth_key_env": "APIM_SUBSCRIPTION_KEY",
+      "param_location": "body",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "shipment_id": { "type": "string", "description": "Shipment ID to look up in Logility" }
+        },
+        "required": ["shipment_id"]
+      }
+    },
+    {
+      "tool_name": "get_shipment_from_wms",
+      "description": "Get shipment information from the Warehouse Management System (WMS). Use when user asks for WMS shipment status, warehouse shipment details, or pick/pack status.",
+      "project": "fn-dev-dimitri-getshipmentfromwms",
+      "method": "GET",
+      "target_url": "https://apim-dev-intg.azure-api.net/api/dev/dimitri/shipmentfromwms",
+      "auth_header": "Ocp-Apim-Subscription-Key",
+      "auth_key_env": "APIM_SUBSCRIPTION_KEY",
+      "param_location": "query",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "shipment_id": { "type": "string", "description": "WMS shipment ID" },
+          "SO_NUMBER":   { "type": "string", "description": "Sales order number" }
+        },
+        "required": []
       }
     }
   ]
