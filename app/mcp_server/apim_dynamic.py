@@ -41,6 +41,21 @@ APIM_BASE_URL = os.getenv("APIM_BASE_URL", "https://apim-dev-intg.azure-api.net"
 MCP_TAG = os.getenv("APIM_MCP_TAG", "mcp-enabled")
 APIM_SUBSCRIPTION_KEY = os.getenv("APIM_SUBSCRIPTION_KEY", "")
 
+# System-to-system EDI/B2B APIs — not meant for AI interaction, excluded from tool list
+_EXCLUDED_PREFIXES = (
+    "o2c_",          # Order-to-Cash EDI inbound callbacks
+    "p2p_",          # Procure-to-Pay EDI callbacks
+    "p2m_",          # Procure-to-Manufacture EDI
+    "b2b_",          # B2B/EDI integrations
+    "echo_api",      # APIM test/echo API
+    "testblob",      # Test blob API
+    "fourkites_",    # FourKites inbound webhook
+    "fap_dev_",      # Live tracking event ingest (inbound)
+    "3pl_ofc_",      # 3PL inbound callbacks
+    "fn_dev_edi_",   # EDI function app inbounds
+)
+_MAX_TOOLS = 70
+
 _MGMT_BASE = (
     f"https://management.azure.com/subscriptions/{SUBSCRIPTION_ID}"
     f"/resourceGroups/{RESOURCE_GROUP}"
@@ -184,11 +199,18 @@ async def fetch_tools() -> list[dict]:
             a for a in all_apis
             if MCP_TAG in (a.get("properties", {}).get("tags") or [])
         ]
-        apis = tagged or all_apis
+        candidate_apis = tagged or all_apis
+
+        # Exclude system-to-system EDI/B2B APIs not meant for AI
+        # Normalize hyphens → underscores before prefix check (APIM names use hyphens)
+        apis = [
+            a for a in candidate_apis
+            if not any(a.get("name", "").lower().replace("-", "_").startswith(p) for p in _EXCLUDED_PREFIXES)
+        ]
 
         logger.info(
-            "APIM discovery: %d total APIs, %d with tag '%s' → using %d",
-            len(all_apis), len(tagged), MCP_TAG, len(apis),
+            "APIM discovery: %d total, %d tagged, %d after excluding EDI/B2B → fetching operations",
+            len(all_apis), len(tagged), len(apis),
         )
 
         tools: list[dict] = []
@@ -205,6 +227,11 @@ async def fetch_tools() -> list[dict]:
             except Exception as exc:
                 logger.warning("Skipping API %s: %s", api_id, exc)
 
+        if len(tools) > _MAX_TOOLS:
+            logger.warning("Tool count %d exceeds limit %d — truncating", len(tools), _MAX_TOOLS)
+            tools = tools[:_MAX_TOOLS]
+
+        logger.info("APIM discovery: returning %d tools", len(tools))
         return tools
 
 
