@@ -44,12 +44,11 @@ class ToolDefinition:
 
 def load_tools() -> dict[str, ToolDefinition]:
     """
-    Loads every tool definition from the registry.
-
-    SWAP POINT: replace this function body with a query against Azure
-    Table Storage / Cosmos DB and return the same dict[str, ToolDefinition].
-    Every other module in this package stays untouched.
+    Loads every tool definition from the registry file.
+    Returns empty dict if file is missing — APIM dynamic discovery is the primary source.
     """
+    if not _REGISTRY_FILE.exists():
+        return {}
     raw = json.loads(_REGISTRY_FILE.read_text(encoding="utf-8"))
     tools: dict[str, ToolDefinition] = {}
     for entry in raw.get("tools", []):
