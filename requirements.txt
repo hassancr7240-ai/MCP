@@ -14,3 +14,7 @@ uvicorn[standard]==0.32.1
 # Azure identity — used by APIM-dynamic server (server_apim.py)
 # DefaultAzureCredential picks up Managed Identity on Azure, az login locally
 azure-identity>=1.15.0
+
+# Application Insights / Azure Monitor — optional, activates when
+# APPLICATIONINSIGHTS_CONNECTION_STRING env var is set on App Service
+azure-monitor-opentelemetry>=1.6.0

@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import logging
 import os
-from functools import lru_cache
+import time
 from typing import Any
 
 import httpx
@@ -40,6 +40,17 @@ APIM_NAME = os.getenv("APIM_SERVICE_NAME", "apim-dev-intg")
 APIM_BASE_URL = os.getenv("APIM_BASE_URL", "https://apim-dev-intg.azure-api.net").rstrip("/")
 MCP_TAG = os.getenv("APIM_MCP_TAG", "mcp-enabled")
 APIM_SUBSCRIPTION_KEY = os.getenv("APIM_SUBSCRIPTION_KEY", "")
+
+# When True: zero tagged APIs → return zero tools (production safe).
+# When False (default): zero tagged APIs → return all APIs (POC mode).
+APIM_REQUIRE_TAG = os.getenv("APIM_REQUIRE_TAG", "false").lower() == "true"
+
+# How long (seconds) to keep the tool list in memory before re-fetching.
+# On cache miss or refresh failure, stale cache is served instead of empty.
+_CACHE_TTL = int(os.getenv("APIM_CACHE_TTL_SECONDS", "600"))  # 10 minutes
+
+_tool_cache: list[dict] = []
+_cache_timestamp: float = 0.0
 
 # System-to-system EDI/B2B APIs — not meant for AI interaction, excluded from tool list
 _EXCLUDED_PREFIXES = (
@@ -62,6 +73,18 @@ _MGMT_BASE = (
     f"/providers/Microsoft.ApiManagement/service/{APIM_NAME}"
 )
 _API_VERSION = "2022-08-01"
+
+
+def get_cache_info() -> dict:
+    """Return current cache state — used by the /health endpoint."""
+    age = round(time.time() - _cache_timestamp, 1) if _cache_timestamp else None
+    return {
+        "tool_count": len(_tool_cache),
+        "cache_age_seconds": age,
+        "cache_fresh": age is not None and age < _CACHE_TTL,
+        "cache_ttl_seconds": _CACHE_TTL,
+        "require_tag": APIM_REQUIRE_TAG,
+    }
 
 
 def _get_bearer_token() -> str:
@@ -171,46 +194,44 @@ def _operation_to_tool(api: dict, operation: dict) -> dict:
     }
 
 
-async def fetch_tools() -> list[dict]:
+async def _discover_tools() -> list[dict]:
     """
-    Query APIM Management REST API and return all MCP tool definitions.
-
-    Filters to APIs tagged with APIM_MCP_TAG (default: "mcp-enabled").
-    If no tagged APIs exist, falls back to ALL APIs so the POC still works.
+    Inner discovery function — calls management.azure.com and builds tool list.
+    Called by fetch_tools(); do not call directly.
     """
-    try:
-        token = _get_bearer_token()
-    except Exception as exc:
-        logger.error("Cannot get Azure token for APIM discovery: %s", exc)
-        return []
-
+    token = _get_bearer_token()
     headers = {"Authorization": f"Bearer {token}"}
 
     async with httpx.AsyncClient(timeout=20) as client:
-        # Fetch all APIs
         resp = await client.get(
             f"{_MGMT_BASE}/apis?api-version={_API_VERSION}", headers=headers
         )
         resp.raise_for_status()
         all_apis = resp.json().get("value", [])
 
-        # Filter to tagged APIs; fall back to all if none tagged
         tagged = [
             a for a in all_apis
             if MCP_TAG in (a.get("properties", {}).get("tags") or [])
         ]
-        candidate_apis = tagged or all_apis
 
-        # Exclude system-to-system EDI/B2B APIs not meant for AI
-        # Normalize hyphens → underscores before prefix check (APIM names use hyphens)
+        # APIM_REQUIRE_TAG=true  → production mode: tagged only, empty if none tagged
+        # APIM_REQUIRE_TAG=false → POC mode: fall back to all APIs when none tagged
+        if APIM_REQUIRE_TAG:
+            candidate_apis = tagged
+        else:
+            candidate_apis = tagged or all_apis
+
         apis = [
             a for a in candidate_apis
-            if not any(a.get("name", "").lower().replace("-", "_").startswith(p) for p in _EXCLUDED_PREFIXES)
+            if not any(
+                a.get("name", "").lower().replace("-", "_").startswith(p)
+                for p in _EXCLUDED_PREFIXES
+            )
         ]
 
         logger.info(
-            "APIM discovery: %d total, %d tagged, %d after excluding EDI/B2B → fetching operations",
-            len(all_apis), len(tagged), len(apis),
+            "APIM discovery: %d total, %d tagged, %d after EDI/B2B filter, require_tag=%s",
+            len(all_apis), len(tagged), len(apis), APIM_REQUIRE_TAG,
         )
 
         tools: list[dict] = []
@@ -231,8 +252,43 @@ async def fetch_tools() -> list[dict]:
             logger.warning("Tool count %d exceeds limit %d — truncating", len(tools), _MAX_TOOLS)
             tools = tools[:_MAX_TOOLS]
 
-        logger.info("APIM discovery: returning %d tools", len(tools))
         return tools
+
+
+async def fetch_tools() -> list[dict]:
+    """
+    Return MCP tool definitions, using an in-memory cache to avoid hitting
+    management.azure.com on every request.
+
+    Cache TTL is controlled by APIM_CACHE_TTL_SECONDS (default 600 = 10 min).
+    If discovery fails and a stale cache exists, the stale cache is returned
+    so Copilot Studio stays functional during transient Azure outages.
+    """
+    global _tool_cache, _cache_timestamp
+
+    # Serve from cache if still fresh
+    if _tool_cache and (time.time() - _cache_timestamp) < _CACHE_TTL:
+        logger.info("APIM cache hit: returning %d cached tools (age %.0fs)",
+                    len(_tool_cache), time.time() - _cache_timestamp)
+        return _tool_cache
+
+    # Attempt fresh discovery
+    try:
+        tools = await _discover_tools()
+        _tool_cache = tools
+        _cache_timestamp = time.time()
+        logger.info("APIM discovery complete: %d tools cached", len(_tool_cache))
+        return _tool_cache
+    except Exception as exc:
+        logger.error("APIM discovery failed: %s", exc)
+        if _tool_cache:
+            logger.warning(
+                "Returning stale cache (%d tools, age %.0fs) — Azure unreachable",
+                len(_tool_cache), time.time() - _cache_timestamp,
+            )
+            return _tool_cache
+        logger.error("No cache available — returning empty tool list")
+        return []
 
 
 async def call_tool(tool_name: str, arguments: dict, tools: list[dict]) -> str:
@@ -260,5 +316,12 @@ async def call_tool(tool_name: str, arguments: dict, tools: list[dict]) -> str:
             resp = await client.get(url, params=arguments, headers=headers)
         else:
             resp = await client.request(method, url, json=arguments, headers=headers)
+
+        if resp.is_error:
+            logger.warning("APIM call failed | tool=%s status=%d url=%s", tool_name, resp.status_code, url)
+            return (
+                f'{{"error": true, "status_code": {resp.status_code}, '
+                f'"tool": "{tool_name}", "detail": {resp.text!r}}}'
+            )
 
         return resp.text
