@@ -20,8 +20,10 @@ ENVIRONMENT VARIABLES:
   APIM_RESOURCE_GROUP     Resource group of the APIM instance
   APIM_SERVICE_NAME       APIM service name (e.g. apim-dev-intg)
   APIM_BASE_URL           APIM gateway URL (e.g. https://apim-dev-intg.azure-api.net)
-  APIM_MCP_TAG            Tag to filter APIs (default: mcp-enabled)
+  APIM_MCP_TAG            Tag to whitelist APIs (default: mcp-enabled)
+  APIM_MCP_EXCLUDE_TAG    Tag to blocklist APIs (default: mcp-excluded)
   APIM_SUBSCRIPTION_KEY   Subscription key sent on every tool call (x-api-key header)
+  APIM_EXCLUDED_APIS      Comma-separated exact API names to block (no redeploy needed)
 """
 from __future__ import annotations
 
@@ -39,11 +41,18 @@ RESOURCE_GROUP = os.getenv("APIM_RESOURCE_GROUP", "rg-dev-integrationTeam")
 APIM_NAME = os.getenv("APIM_SERVICE_NAME", "apim-dev-intg")
 APIM_BASE_URL = os.getenv("APIM_BASE_URL", "https://apim-dev-intg.azure-api.net").rstrip("/")
 MCP_TAG = os.getenv("APIM_MCP_TAG", "mcp-enabled")
+MCP_EXCLUDE_TAG = os.getenv("APIM_MCP_EXCLUDE_TAG", "mcp-excluded")
 APIM_SUBSCRIPTION_KEY = os.getenv("APIM_SUBSCRIPTION_KEY", "")
 
 # When True: zero tagged APIs → return zero tools (production safe).
 # When False (default): zero tagged APIs → return all APIs (POC mode).
 APIM_REQUIRE_TAG = os.getenv("APIM_REQUIRE_TAG", "false").lower() == "true"
+
+# Comma-separated list of exact APIM API names to block from MCP tool list.
+# Set APIM_EXCLUDED_APIS=api_name_1,api_name_2 on App Service — no code change needed.
+_EXCLUDED_EXACT: frozenset[str] = frozenset(
+    x.strip() for x in os.getenv("APIM_EXCLUDED_APIS", "").split(",") if x.strip()
+)
 
 # How long (seconds) to keep the tool list in memory before re-fetching.
 # On cache miss or refresh failure, stale cache is served instead of empty.
@@ -84,6 +93,8 @@ def get_cache_info() -> dict:
         "cache_fresh": age is not None and age < _CACHE_TTL,
         "cache_ttl_seconds": _CACHE_TTL,
         "require_tag": APIM_REQUIRE_TAG,
+        "exclude_tag": MCP_EXCLUDE_TAG,
+        "excluded_exact_count": len(_EXCLUDED_EXACT),
     }
 
 
@@ -227,10 +238,12 @@ async def _discover_tools() -> list[dict]:
                 a.get("name", "").lower().replace("-", "_").startswith(p)
                 for p in _EXCLUDED_PREFIXES
             )
+            and MCP_EXCLUDE_TAG not in (a.get("properties", {}).get("tags") or [])
+            and a.get("name", "") not in _EXCLUDED_EXACT
         ]
 
         logger.info(
-            "APIM discovery: %d total, %d tagged, %d after EDI/B2B filter, require_tag=%s",
+            "APIM discovery: %d total, %d tagged, %d after all filters, require_tag=%s",
             len(all_apis), len(tagged), len(apis), APIM_REQUIRE_TAG,
         )
 
