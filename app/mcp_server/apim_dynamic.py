@@ -46,10 +46,10 @@ APIM_SUBSCRIPTION_KEY = os.getenv("APIM_SUBSCRIPTION_KEY", "")
 
 # When True: zero tagged APIs → return zero tools (production safe).
 # When False (default): zero tagged APIs → return all APIs (POC mode).
-APIM_REQUIRE_TAG = os.getenv("APIM_REQUIRE_TAG", "false").lower() == "true"
+APIM_REQUIRE_TAG = os.getenv("APIM_REQUIRE_TAG", "true").lower() == "true"
 
 # Comma-separated list of exact APIM API names to block from MCP tool list.
-# Set APIM_EXCLUDED_APIS=api_name_1,api_name_2 on App Service — no code change needed.
+# Set APIM_EXCLUDED_APIS=api_name_1,api_name_2 on AApp Service — no code change needed.
 _EXCLUDED_EXACT: frozenset[str] = frozenset(
     x.strip() for x in os.getenv("APIM_EXCLUDED_APIS", "").split(",") if x.strip()
 )
@@ -220,10 +220,24 @@ async def _discover_tools() -> list[dict]:
         resp.raise_for_status()
         all_apis = resp.json().get("value", [])
 
-        tagged = [
-            a for a in all_apis
-            if MCP_TAG in (a.get("properties", {}).get("tags") or [])
-        ]
+        # Fetch APIs tagged with mcp-enabled via /tagResources?$filter=tag/name eq '...'
+        # This is the correct APIM endpoint — /tags/{id}/apis returns 404 when used as a filter.
+        tag_resp = await client.get(
+            f"{_MGMT_BASE}/tagResources?api-version={_API_VERSION}"
+            f"&$filter=tag/name eq '{MCP_TAG}'",
+            headers=headers,
+        )
+        if tag_resp.status_code == 200:
+            tagged_names = {
+                r["api"]["name"]
+                for r in tag_resp.json().get("value", [])
+                if r.get("api") and r["api"].get("name")
+            }
+        else:
+            logger.warning("Could not fetch tagged APIs (status %d) — treating as empty", tag_resp.status_code)
+            tagged_names = set()
+
+        tagged = [a for a in all_apis if a.get("name") in tagged_names]
 
         # APIM_REQUIRE_TAG=true  → production mode: tagged only, empty if none tagged
         # APIM_REQUIRE_TAG=false → POC mode: fall back to all APIs when none tagged
@@ -232,13 +246,28 @@ async def _discover_tools() -> list[dict]:
         else:
             candidate_apis = tagged or all_apis
 
+        # Fetch excluded tag list the same way
+        exclude_resp = await client.get(
+            f"{_MGMT_BASE}/tagResources?api-version={_API_VERSION}"
+            f"&$filter=tag/name eq '{MCP_EXCLUDE_TAG}'",
+            headers=headers,
+        )
+        if exclude_resp.status_code == 200:
+            excluded_names = {
+                r["api"]["name"]
+                for r in exclude_resp.json().get("value", [])
+                if r.get("api") and r["api"].get("name")
+            }
+        else:
+            excluded_names = set()
+
         apis = [
             a for a in candidate_apis
             if not any(
                 a.get("name", "").lower().replace("-", "_").startswith(p)
                 for p in _EXCLUDED_PREFIXES
             )
-            and MCP_EXCLUDE_TAG not in (a.get("properties", {}).get("tags") or [])
+            and a.get("name", "") not in excluded_names
             and a.get("name", "") not in _EXCLUDED_EXACT
         ]
 

@@ -100,6 +100,13 @@ except (ImportError, AttributeError) as exc:
 
 @asynccontextmanager
 async def lifespan(app):
+    # Warm up the tool cache on startup so tool_count is populated immediately.
+    try:
+        tools = await apim_dynamic.fetch_tools()
+        logger.info("Startup tool warmup: %d tools loaded", len(tools))
+    except Exception as exc:
+        logger.warning("Startup tool warmup failed (will retry on first request): %s", exc)
+
     if _session_manager is not None:
         async with _session_manager.run():
             logger.info("APIM-backed StreamableHTTPSessionManager running")
