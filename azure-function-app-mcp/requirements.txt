@@ -1,0 +1,2 @@
+azure-functions>=2.2.0b3
+httpx
